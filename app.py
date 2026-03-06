@@ -75,7 +75,7 @@ async def create_jwt_fast(uid: str, password: str):
         proto_bytes = login_req.SerializeToString()
 
         payload = aes_cbc_encrypt_fast(MAIN_KEY, MAIN_IV, proto_bytes)  
-        url = "https://loginbp.ggblueshark.com/MajorLogin"  
+        url = "https://loginbp.ggpolarbear.com/MajorLogin"  
         headers = {  
             'User-Agent': USERAGENT,  
             'Connection': "Keep-Alive",  
@@ -207,7 +207,7 @@ def enc(uid):
 def make_request(encrypt, server_name, token):
     try:
         if server_name == "CIS":
-            url = "https://client.ggpolarbear.com/GetPlayerPersonalShow"
+            url = "https://clientbp.ggpolarbear.com/GetPlayerPersonalShow"
         elif server_name in {"BR", "US", "SAC", "NA"}:
             url = "https://client.us.freefiremobile.com/GetPlayerPersonalShow"
         else:
