@@ -8,6 +8,8 @@ import logging
 import warnings
 import requests
 import time
+from typing import Optional
+import aiohttp
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 from google.protobuf.json_format import MessageToJson, ParseDict
@@ -34,6 +36,8 @@ MAIN_KEY = base64.b64decode('WWcmdGMlREV1aDYlWmNeOA==')
 MAIN_IV = base64.b64decode('Nm95WkRyMjJFM3ljaGpNJQ==')
 USERAGENT = "Dalvik/2.1.0 (Linux; U; Android 13; CPH2095 Build/RKQ1.211119.001)"
 RELEASEVERSION = "OB52"
+TOKEN_CACHE_TTL_SECONDS = 600
+_token_cache = {}
 
 # === Fast JWT Helpers ===
 def pad_data(text: bytes) -> bytes:
@@ -102,7 +106,13 @@ async def load_tokens_async(server_name):
     Async variant (safe to call from existing event loop).
     """
     try:
-        account_file = f"accounts_{server_name.lower()}.json"
+        normalized_server = server_name.lower()
+        cached = _token_cache.get(normalized_server)
+        now = time.time()
+        if cached and now - cached["created_at"] < TOKEN_CACHE_TTL_SECONDS:
+            return cached["tokens"]
+
+        account_file = f"accounts_{normalized_server}.json"
         with open(account_file, "r") as f:
             accounts = json.load(f)
 
@@ -112,6 +122,11 @@ async def load_tokens_async(server_name):
 
         jwt_list = await asyncio.gather(*tasks)
         tokens = [{"token": tk} for tk in jwt_list if tk]
+        if tokens:
+            _token_cache[normalized_server] = {
+                "tokens": tokens,
+                "created_at": now
+            }
         return tokens if tokens else None
     except Exception as e:
         app.logger.error(f"Token load failed for {server_name}: {e}")
@@ -146,7 +161,7 @@ def create_protobuf_message(user_id, region):
         app.logger.error(f"Protobuf creation (like) failed. Error: {e}")
         return None
 
-async def send_request(encrypted_uid, token, url):
+async def send_request(session: aiohttp.ClientSession, encrypted_uid, token, url):
     try:
         edata = bytes.fromhex(encrypted_uid)
         headers = {
@@ -160,18 +175,14 @@ async def send_request(encrypted_uid, token, url):
             'X-GA': "v1 1",
             'ReleaseVersion': "OB52"
         }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=edata, headers=headers) as response:
-                if response.status != 200:
-                    return response.status
-                return await response.text()
+        async with session.post(url, data=edata, headers=headers) as response:
+            if response.status != 200:
+                return response.status
+            return await response.text()
     except Exception as e:
         return None
 
-# Re-importing aiohttp correctly inside the scope
-import aiohttp
-
-async def send_multiple_requests(uid, server_name, url):
+async def send_multiple_requests(uid, server_name, url, tokens: Optional[list] = None):
     try:
         region = server_name
         protobuf_message = create_protobuf_message(uid, region)
@@ -179,15 +190,18 @@ async def send_multiple_requests(uid, server_name, url):
         encrypted_uid = encrypt_message(protobuf_message)
         if encrypted_uid is None: return None
         
-        tokens = await load_tokens_async(server_name)
+        if tokens is None:
+            tokens = await load_tokens_async(server_name)
         if tokens is None: return None
-        
-        tasks = []
-        for i in range(100):
-            token = tokens[i % len(tokens)]["token"]
-            tasks.append(send_request(encrypted_uid, token, url))
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        return results
+
+        timeout = aiohttp.ClientTimeout(total=8, connect=3, sock_read=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            tasks = []
+            for i in range(100):
+                token = tokens[i % len(tokens)]["token"]
+                tasks.append(send_request(session, encrypted_uid, token, url))
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            return results
     except Exception as e:
         return None
 
@@ -270,7 +284,7 @@ def handle_requests():
         else:
             url = "https://clientbp.ggblueshark.com/LikeProfile"
 
-        asyncio.run(send_multiple_requests(uid, server_name, url))
+        asyncio.run(send_multiple_requests(uid, server_name, url, tokens=tokens))
 
         after = make_request(encrypted_uid, server_name, token)
         if after is None: raise Exception("Failed after info.")
