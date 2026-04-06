@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 import asyncio
 import httpx
 import base64
@@ -8,6 +8,7 @@ import logging
 import warnings
 import requests
 import time
+import glob
 from typing import Optional
 import aiohttp
 from Crypto.Cipher import AES
@@ -255,6 +256,34 @@ def decode_protobuf(binary):
         return items
     except Exception as e:
         return None
+
+
+
+@app.route('/', methods=['GET'])
+def index():
+    return render_template('index.html')
+
+
+@app.route('/token_info', methods=['GET'])
+def token_info():
+    result = {}
+    for account_file in sorted(glob.glob('accounts_*.json')):
+        server = account_file.replace('accounts_', '').replace('.json', '').upper()
+        try:
+            with open(account_file, 'r') as f:
+                accounts = json.load(f)
+            total = len(accounts) if isinstance(accounts, list) else 0
+            result[server] = {
+                'regular_tokens': total,
+                'visit_tokens': 0
+            }
+        except Exception as exc:
+            result[server] = {
+                'regular_tokens': 0,
+                'visit_tokens': 0,
+                'error': str(exc)
+            }
+    return jsonify(result)
 
 @app.route('/like', methods=['GET'])
 def handle_requests():
