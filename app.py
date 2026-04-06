@@ -96,31 +96,32 @@ async def create_jwt_fast(uid: str, password: str):
         return None
 
 # === Integrated Token Loader (Updated for Multiple Regions) ===
-def load_tokens(server_name):
+async def load_tokens_async(server_name):
     """
-    Dynamically generate tokens from region-specific account files
+    Dynamically generate tokens from region-specific account files.
+    Async variant (safe to call from existing event loop).
     """
     try:
-        # Construct filename based on server_name (e.g., accounts_cis.json)
         account_file = f"accounts_{server_name.lower()}.json"
-        
         with open(account_file, "r") as f:
             accounts = json.load(f)
 
-        async def batch_generate():  
-            tasks = []  
-            for acc in accounts:  
-                tasks.append(create_jwt_fast(str(acc['uid']), str(acc['password'])))  
-            return await asyncio.gather(*tasks)  
+        tasks = []
+        for acc in accounts:
+            tasks.append(create_jwt_fast(str(acc['uid']), str(acc['password'])))
 
-        # Run the async token generation  
-        jwt_list = asyncio.run(batch_generate())  
-          
-        tokens = [{"token": tk} for tk in jwt_list if tk]  
-        return tokens if tokens else None  
-    except Exception as e:  
-        app.logger.error(f"Token load failed for {server_name}: {e}")   
+        jwt_list = await asyncio.gather(*tasks)
+        tokens = [{"token": tk} for tk in jwt_list if tk]
+        return tokens if tokens else None
+    except Exception as e:
+        app.logger.error(f"Token load failed for {server_name}: {e}")
         return None
+
+def load_tokens(server_name):
+    """
+    Synchronous wrapper for contexts where no event loop is running.
+    """
+    return asyncio.run(load_tokens_async(server_name))
 
 # === Original Functions (Unchanged) ===
 def encrypt_message(plaintext):
@@ -159,7 +160,7 @@ async def send_request(encrypted_uid, token, url):
             'X-GA': "v1 1",
             'ReleaseVersion': "OB52"
         }
-        async with aiohttp_ClientSession() as session: # Note: This requires 'from aiohttp import ClientSession as aiohttp_ClientSession'
+        async with aiohttp.ClientSession() as session:
             async with session.post(url, data=edata, headers=headers) as response:
                 if response.status != 200:
                     return response.status
@@ -178,7 +179,7 @@ async def send_multiple_requests(uid, server_name, url):
         encrypted_uid = encrypt_message(protobuf_message)
         if encrypted_uid is None: return None
         
-        tokens = load_tokens(server_name)
+        tokens = await load_tokens_async(server_name)
         if tokens is None: return None
         
         tasks = []
